@@ -1,214 +1,110 @@
-// bb-plugin-progressive-skill — smart skill index compaction for BB.
-//
-// Port of the Hermes `progressive-skill` plugin's decision core (usage
-// frequency + recency decay + budget-capped ranking) to BB's plugin model.
-//
-// BB has no `build_skills_system_prompt` to monkeypatch, so the port exposes
-// the decision core as two native agent tools instead:
-//
-//   - `progressive_skill_list` — returns the skill catalog ranked by usage
-//     frequency (with recency decay) and capped to a token budget. The agent
-//     calls this when it needs to know which skills are worth loading.
-//   - `progressive_skill_used` — records that a skill was actually used, so
-//     frequently-used skills rise in the ranking.
-//
-// The decision logic (decay scoring, promote threshold, budget cap) is ported
-// faithfully from the Hermes core/ modules.
-import { type BbPluginApi } from "@get-bb/plugin-sdk";
+import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
+import { createHash } from "node:crypto";
+import { hostContract, readInput, skillName } from "./contract.js";
+import { renderList, rank, type Usage } from "./ranking.js";
 
-// ─── Config (mirrors core/config.py) ──────────────────────────────────
-
-const DECAY_DAYS = 30.0; // score = count × exp(-Δdays / 30)
-const PROMOTE_SCORE = 2.0; // a skill is "promoted" when its decayed score ≥ this
-const LIST_BUDGET_CHARS = 4600; // ≈ 1150 tokens
-
-// ─── Usage store (mirrors core/scorer.py) ──────────────────────────────
-
-interface UsageEntry {
-  count: number;
-  last_used: number; // epoch seconds
-}
-
-class UsageTracker {
-  private usage = new Map<string, UsageEntry>();
-  private dirty = false;
-
-  constructor(private kv: { get<T>(key: string): Promise<T | undefined>; set(key: string, value: unknown): Promise<void> }) {}
-
-  async load(): Promise<void> {
-    try {
-      const raw = await this.kv.get<Record<string, unknown>>("usage");
-      if (raw && typeof raw === "object") {
-        for (const [k, v] of Object.entries(raw)) {
-          if (v && typeof v === "object") {
-            const e = v as Record<string, unknown>;
-            this.usage.set(k, {
-              count: Number(e.count) || 0,
-              last_used: Number(e.last_used) || 0,
-            });
-          }
-        }
-      }
-    } catch {
-      // start empty
-    }
-  }
-
-  record(skillName: string): void {
-    if (!skillName) return;
-    const now = Date.now() / 1000;
-    const entry = this.usage.get(skillName);
-    if (entry) {
-      entry.count += 1;
-      entry.last_used = now;
-    } else {
-      this.usage.set(skillName, { count: 1, last_used: now });
-    }
-    this.dirty = true;
-  }
-
-  decayedScore(count: number, lastUsed: number): number {
-    const days = Math.max(0, (Date.now() / 1000 - lastUsed) / 86400);
-    return count * Math.exp(-days / DECAY_DAYS);
-  }
-
-  snapshot(): Map<string, UsageEntry> {
-    return new Map(this.usage);
-  }
-
-  async save(): Promise<void> {
-    if (!this.dirty) return;
-    const obj: Record<string, unknown> = {};
-    for (const [k, v] of this.usage) obj[k] = v;
-    await this.kv.set("usage", obj);
-    this.dirty = false;
-  }
-}
-
-// ─── Plugin entry ──────────────────────────────────────────────────────
+const listInput = z.object({ query: z.string().max(200).optional(), maxSkills: z.number().int().min(1).max(100).default(30) });
 
 export default async function plugin(bb: BbPluginApi) {
-  bb.log.info("bb-plugin-progressive-skill loaded");
-
   const settings = bb.settings.define({
-    budgetChars: {
-      type: "string" as const,
-      label: "Skill list budget (chars)",
-      default: String(LIST_BUDGET_CHARS),
-      description: "Max characters of the ranked skill list. ≈ 4 chars/token.",
-    },
-    promoteScore: {
-      type: "string" as const,
-      label: "Promote threshold (decayed score)",
-      default: String(PROMOTE_SCORE),
-      description: "A skill with decayed score ≥ this is ranked as 'promoted'.",
-    },
+    registryHostId: { type: "string", label: "HSR host ID", default: "", description: "Explicit BB host containing the authoritative HSR checkout." },
+    registryPath: { type: "string", label: "HSR checkout path", default: "", description: "Absolute hong-skill-registry path on the configured host." },
+    nodeBinary: { type: "string", label: "Node executable on HSR host", default: "node", description: "Node >= 22.5 for the read-only HSR usage command." },
+    budgetChars: { type: "number", label: "List character budget", default: 6000, experimental_schema: z.number().int().min(1000).max(20000) },
+    promoteScore: { type: "number", label: "Promote score", default: 2, experimental_schema: z.number().min(0).max(1000000) },
   });
-
-  let { budgetChars, promoteScore } = await settings.get();
-  let budget = Number(budgetChars) || LIST_BUDGET_CHARS;
-  let promote = Number(promoteScore) || PROMOTE_SCORE;
-  const tracker = new UsageTracker(bb.storage.kv);
-  await tracker.load();
-
-  // Re-read settings on change without a plugin reload.
-  settings.onChange((next) => {
-    budgetChars = next.budgetChars;
-    promoteScore = next.promoteScore;
-    budget = Number(budgetChars) || LIST_BUDGET_CHARS;
-    promote = Number(promoteScore) || PROMOTE_SCORE;
-    bb.log.info(`[progressive-skill] settings updated (budget ${budget} chars, promote ≥ ${promote})`);
-  });
-
-  // Resolve the environment for a thread so we can list its skills.
-  async function resolveEnvironment(threadId: string, projectId: string) {
-    try {
-      const thread = await bb.sdk.threads.get({ threadId });
-      if (thread.environmentId) {
-        return { projectId, environmentId: thread.environmentId };
-      }
-    } catch {
-      // fall through
-    }
-    return { projectId, environmentId: null };
+  const host = bb.hosts.experimental_client({ contract: hostContract });
+  async function config() {
+    const s = await settings.get();
+    if (!s.registryHostId || !s.registryPath) throw new Error("Configure hsr registryHostId and registryPath with bb plugin config hsr set <key> <value>.");
+    return s;
   }
-
-  // ── Tool: progressive_skill_list ─────────────────────────────────────
-  // Returns the skill catalog ranked by usage frequency (recency-decayed),
-  // capped to the budget. The agent calls this to decide which skills to load.
+  async function snapshot(signal?: AbortSignal) {
+    const s = await config();
+    const catalog = await host.call("catalog", { registryPath: s.registryPath, nodeBinary: s.nodeBinary }, { hostId: s.registryHostId, signal });
+    const key = "usage:" + createHash("sha256").update(JSON.stringify([s.registryHostId, catalog.registryPath])).digest("hex");
+    const raw = await bb.storage.kv.get<unknown>(key);
+    const parsed = z.record(z.string(), z.object({ count: z.number().nonnegative(), lastUsed: z.number().nonnegative() })).safeParse(raw);
+    const usage: Usage = parsed.success ? parsed.data : {};
+    return { s, catalog, key, usage };
+  }
+  async function list(input: z.infer<typeof listInput>, signal?: AbortSignal, json = false) {
+    const { s, catalog, usage } = await snapshot(signal);
+    if (json) return JSON.stringify({ registryPath: catalog.registryPath, hostId: s.registryHostId, usageStatus: catalog.usageStatus, total: catalog.skills.length, rows: rank(catalog, usage, input.query).slice(0, input.maxSkills) }, null, 2);
+    return renderList(catalog, usage, { ...input, budget: s.budgetChars, promote: s.promoteScore, hostId: s.registryHostId });
+  }
+  async function read(input: z.infer<typeof readInput>, signal?: AbortSignal) {
+    const s = await config();
+    return host.call("read", { ...input, registryPath: s.registryPath, nodeBinary: s.nodeBinary }, { hostId: s.registryHostId, signal });
+  }
+  // Serialize read/modify/write so concurrent agent calls cannot lose counts.
+  let recording: Promise<unknown> = Promise.resolve();
+  function used(skill: string, signal?: AbortSignal) {
+    const next = recording.then(async () => {
+      const { catalog, key, usage } = await snapshot(signal);
+      if (!catalog.skills.some(s => s.name === skill)) throw new Error(`Unknown HSR skill: ${skill}`);
+      // Prune removed names to keep persisted state bounded by the curated catalog.
+      const valid = new Set(catalog.skills.map(s => s.name));
+      for (const name of Object.keys(usage)) if (!valid.has(name)) delete usage[name];
+      usage[skill] = { count: (usage[skill]?.count ?? 0) + 1, lastUsed: Date.now() };
+      await bb.storage.kv.set(key, usage);
+      return `Recorded HSR usage: ${skill}. Count ${usage[skill].count}.`;
+    });
+    recording = next.catch(() => {});
+    return next;
+  }
+  bb.onDispose(async () => { await recording; });
 
   bb.agents.registerTool({
-    name: "progressive_skill_list",
-    description:
-      "List available skills ranked by usage frequency (recency-decayed), capped to a token budget. " +
-      "Call this when you need to decide which skills are worth loading — frequently-used skills rank first, " +
-      "rarely-used ones are trimmed to fit the budget. Returns the ranked list plus a 'promoted' marker " +
-      "on skills above the usage threshold.",
-    parameters: z.object({
-      maxSkills: z
-        .number()
-        .int()
-        .min(1)
-        .max(200)
-        .optional()
-        .describe("Optional cap on the number of skills returned (default: all that fit the budget)."),
-    }),
-    async execute({ maxSkills }, ctx) {
-      const env = await resolveEnvironment(ctx.threadId, ctx.projectId);
-      const skills = await bb.sdk.skills.list(env);
-      const usage = tracker.snapshot();
-
-      // Rank: decayed score desc, then name asc for ties.
-      const ranked = skills.skills
-        .map((s) => {
-          const name = s.name ?? s.id ?? "";
-          const entry = usage.get(name);
-          const score = entry ? tracker.decayedScore(entry.count, entry.last_used) : 0;
-          return { name, score, promoted: score >= promote };
-        })
-        .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
-
-      // Budget cap: keep highest-scored until budget exhausted.
-      const kept: typeof ranked = [];
-      let used = 0;
-      for (const r of ranked) {
-        const cost = r.name.length + 1;
-        if (used + cost > budget) break;
-        kept.push(r);
-        used += cost;
-        if (maxSkills && kept.length >= maxSkills) break;
+    name: "hsr_skill_list",
+    description: "Search curated hong-skill-registry skills by name or description. One entry per source skill, ranked using HSR history and recorded usage, with a bounded description list. Use query to find omitted or rarely-used skills.",
+    instructions: "For hong-skill-registry skills, use hsr_skill_list to discover and hsr_skill_read to load the authoritative text. Record real application with hsr_skill_used. Explicit user requests for a skill take priority over usage rank.",
+    parameters: listInput,
+    execute: (input, ctx) => list(input, ctx.signal),
+  });
+  bb.agents.registerTool({
+    name: "hsr_skill_read",
+    description: "Read a curated HSR skill or a relative supporting file from the configured registry host. Returns a bounded page and nextOffset; continue until all needed instructions are read. Does not record usage automatically.",
+    parameters: readInput,
+    execute: async (input, ctx) => JSON.stringify(await read(input, ctx.signal)),
+  });
+  bb.agents.registerTool({
+    name: "hsr_skill_used",
+    description: "Record an HSR skill after actually applying it. Do not record inspection, search, or editing as use. Accepts only a current curated skill name.",
+    parameters: z.object({ skill: skillName }),
+    execute: ({ skill }, ctx) => used(skill, ctx.signal),
+  });
+  bb.cli.register({
+    name: "hsr",
+    summary: "Search and read curated HSR skills on the configured registry host",
+    commands: [
+      { name: "list", summary: "Ranked skill list", usage: "bb hsr list [--query text] [--limit 1-100] [--json]" },
+      { name: "read", summary: "Read skill or supporting file", usage: "bb hsr read <skill> [--file relative-path] [--offset N] [--limit 1-12000]" },
+      { name: "used", summary: "Record actual skill use", usage: "bb hsr used <skill>" },
+    ],
+    async run(argv, ctx) {
+      try {
+        const [command = "list", ...args] = argv;
+        if (command === "--help" || command === "help") return { exitCode: 0, stdout: "bb hsr list [--query text] [--limit N] [--json]\nbb hsr read <skill> [--file relative-path] [--offset N] [--limit N]\nbb hsr used <skill>" };
+        const positional: string[] = [];
+        const flags: Record<string, string | boolean> = {};
+        for (let i = 0; i < args.length; i++) {
+          const arg = args[i];
+          if (arg === "--json" && command === "list") flags.json = true;
+          else if (arg.startsWith("--")) {
+            const allowed = command === "list" ? ["--query", "--limit"] : command === "read" ? ["--file", "--offset", "--limit"] : [];
+            if (!allowed.includes(arg) || args[i + 1] === undefined || args[i + 1].startsWith("--")) throw new Error(`Invalid option: ${arg}`);
+            flags[arg.slice(2)] = args[++i];
+          } else positional.push(arg);
+        }
+        if (command === "list" && positional.length === 0) return { exitCode: 0, stdout: await list(listInput.parse({ query: flags.query, maxSkills: flags.limit === undefined ? undefined : Number(flags.limit) }), ctx.signal, flags.json === true) };
+        if (command === "read" && positional.length === 1) return { exitCode: 0, stdout: JSON.stringify(await read(readInput.parse({ skill: positional[0], file: flags.file, offset: flags.offset === undefined ? undefined : Number(flags.offset), limit: flags.limit === undefined ? undefined : Number(flags.limit) }), ctx.signal), null, 2) };
+        if (command === "used" && positional.length === 1) return { exitCode: 0, stdout: await used(skillName.parse(positional[0]), ctx.signal) };
+        throw new Error("Unknown command or arguments. Run bb hsr --help.");
+      } catch (error) {
+        return { exitCode: 1, stderr: error instanceof Error ? error.message : String(error) };
       }
-
-      const lines = kept.map((r) => `${r.promoted ? "★ " : "  "}${r.name}`);
-      const summary = `progressive-skill: ${kept.length}/${ranked.length} skills within ${budget} chars. ` +
-        `★ = promoted (decayed score ≥ ${promote}). Call progressive_skill_used after loading a skill.`;
-      return summary + "\n" + lines.join("\n");
     },
-  });
-
-  // ── Tool: progressive_skill_used ────────────────────────────────────
-  // Records that a skill was used, so it rises in the ranking.
-
-  bb.agents.registerTool({
-    name: "progressive_skill_used",
-    description:
-      "Record that you used a skill, so it ranks higher in future progressive_skill_list calls. " +
-      "Call this after actually loading/using a skill.",
-    parameters: z.object({
-      skill: z.string().min(1).describe("The skill name you used."),
-    }),
-    async execute({ skill }) {
-      tracker.record(skill);
-      await tracker.save();
-      return `Recorded usage of '${skill}'. It will rank higher next time.`;
-    },
-  });
-
-  // ── Cleanup ─────────────────────────────────────────────────────────
-
-  bb.onDispose(async () => {
-    await tracker.save();
-    bb.log.info("bb-plugin-progressive-skill disposed");
   });
 }

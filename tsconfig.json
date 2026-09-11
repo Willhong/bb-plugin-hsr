@@ -16,6 +16,7 @@
     "skipLibCheck": false
   },
   "include": [
-    "server.ts"
+    "*.ts",
+    "test/*.ts"
   ]
 }

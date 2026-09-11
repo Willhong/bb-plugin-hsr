@@ -1,0 +1,23 @@
+---
+name: hsr-skills
+description: Use when searching, reading, or recording use of curated hong-skill-registry skills through the HSR Skills BB plugin. Not for importing skills, modifying registry files, or assuming usage rank indicates task fit.
+---
+# HSR skills
+
+Use `hsr_skill_list` (or `bb hsr list --query <text>`) to search the curated registry by name and description. Results contain one entry per registry source directory, not one per provider installation.
+
+Use `hsr_skill_read` with `skill` to read `SKILL.md`. Follow `nextOffset` until all required instructions are read. For a reference, use `file` relative to that skill directory; never guess a path on the current machine from the registry host's path. Files come from the configured registry host through BB host RPC.
+
+After actually applying a skill, call `hsr_skill_used`. Searching, reading for inspection, and editing a skill are not application. Follow explicit user skill requests regardless of ranking or omission from the default list.
+
+CLI equivalents:
+
+- `bb hsr list [--query text] [--limit 1-100] [--json]`
+- `bb hsr read <skill> [--file relative-path] [--offset N] [--limit 1-12000]`
+- `bb hsr used <skill>`
+
+Configure `registryHostId`, absolute `registryPath`, and optionally `nodeBinary` through `bb plugin config hsr set <key> <value>`. The Node executable runs on the configured registry host and must support the HSR CLI (Node >= 22.5). No invocation uses the caller's cwd as the registry.
+
+The plugin reads HSR's `usage --json` history without writing its database. Ranking uses the larger of the history call score and the separately recorded use score, with 30-day decay. These sources may overlap, so they are not summed. Missing history is reported; discovery and reading still work. Rank reflects usage, not task relevance or adoption quality.
+
+This plugin provides an additional bounded index. It does not suppress or replace BB/provider skill prompts and does not manage HSR's provider links.

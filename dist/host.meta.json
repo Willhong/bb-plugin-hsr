@@ -7,5 +7,6 @@
   "builtWith": {
     "bbVersion": "0.42.1",
     "pluginSdkVersion": "0.4.55"
-  }
+  },
+  "artifactDigest": "dbf56cafedc66f7f92f2be75f5f1666c3c633540520e097d7585549496fc3e2d"
 }

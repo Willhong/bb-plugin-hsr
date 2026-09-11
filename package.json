@@ -1,29 +1,40 @@
 {
-  "name": "bb-plugin-progressive-skill",
-  "version": "0.2.1",
+  "name": "bb-plugin-hsr",
+  "version": "0.3.0",
+  "license": "MIT",
+  "repository": "github:Willhong/bb-plugin-hsr",
+  "scripts": {
+    "test": "node --import ./test/register.mjs --import tsx --test test/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "build": "bb plugin build"
+  },
   "type": "module",
   "engines": {
     "bb": ">=0.39",
-    "bbPluginSdk": ">=0.4.8"
+    "bbPluginSdk": ">=0.4.55"
   },
   "bb": {
-    "name": "Progressive Skill",
-    "description": "Smart skill index compaction — usage-ranked, budget-capped skill lists.",
+    "name": "HSR Skills",
+    "description": "Search and read curated HSR skills, ranked by HSR history and recorded usage.",
     "branding": {
       "icon": "Layers"
     },
-    "server": "./server.ts"
+    "server": "./server.ts",
+    "host": "./host.ts"
   },
   "dependencies": {
+    "yaml": "^2.8.1",
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@get-bb/plugin-sdk": "0.4.8",
+    "@get-bb/plugin-sdk": "0.4.55",
     "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
     "better-sqlite3": "^12.0.0",
-    "hono": "^4.11.9",
+    "cron-parser": "^5.10.0",
+    "hono": "^4.13.7",
+    "tsx": "^4.20.0",
     "typescript": "^5.7.0"
   }
 }
