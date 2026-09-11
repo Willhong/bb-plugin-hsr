@@ -14531,7 +14531,7 @@ import { randomUUID } from "node:crypto";
 import { defineRpcContract } from "@get-bb/plugin-sdk";
 var skillName = external_exports.string().regex(/^[a-z0-9][a-z0-9_-]{0,99}$/);
 var location = external_exports.object({ registryPath: external_exports.string().min(1), nodeBinary: external_exports.string().min(1) });
-var historyEntry = external_exports.object({ calls: external_exports.number().nonnegative(), loads: external_exports.number().nonnegative().default(0), applications: external_exports.number().nonnegative().default(0), lastUsed: external_exports.string().nullable() });
+var historyEntry = external_exports.object({ calls: external_exports.number().nonnegative(), requests: external_exports.number().nonnegative().default(0), loads: external_exports.number().nonnegative().default(0), applications: external_exports.number().nonnegative().default(0), lastUsed: external_exports.string().nullable() });
 var catalogSchema = external_exports.object({
   registryPath: external_exports.string(),
   skills: external_exports.array(external_exports.object({ name: skillName, description: external_exports.string(), path: external_exports.string() })).max(500),
@@ -14549,7 +14549,7 @@ var hostContract = defineRpcContract({
     input: location.extend({ skill: skillName, kind: external_exports.enum(["loaded", "applied"]), session: external_exports.string().min(1).max(300), eventId: external_exports.string().min(1).max(100) }),
     output: external_exports.object({ recorded: external_exports.boolean(), eventId: external_exports.string(), skill: external_exports.string(), kind: external_exports.string() })
   },
-  catalog: { input: location, output: catalogSchema },
+  catalog: { input: location.extend({ collect: external_exports.boolean().default(true) }), output: catalogSchema },
   read: {
     input: location.extend(readInput.shape),
     output: external_exports.object({ path: external_exports.string(), text: external_exports.string(), totalChars: external_exports.number(), nextOffset: external_exports.number().nullable() })
@@ -14566,7 +14566,7 @@ function rank(catalog, query = "", now = Date.now()) {
   return catalog.skills.filter((s) => !q || `${s.name} ${s.description}`.toLocaleLowerCase().includes(q)).map((s) => {
     const h = catalog.history[s.name];
     const historicalScore = h ? decayedScore(h.calls, Date.parse(h.lastUsed ?? ""), now) : 0;
-    return { ...s, calls: h?.calls ?? 0, loads: h?.loads ?? 0, applications: h?.applications ?? 0, lastUsed: h?.lastUsed ?? null, score: historicalScore };
+    return { ...s, calls: h?.calls ?? 0, requests: h?.requests ?? 0, loads: h?.loads ?? 0, applications: h?.applications ?? 0, lastUsed: h?.lastUsed ?? null, score: historicalScore };
   }).sort((a, b) => Number(b.name.toLocaleLowerCase() === q) - Number(a.name.toLocaleLowerCase() === q) || b.score - a.score || a.name.localeCompare(b.name));
 }
 function renderList(catalog, options) {
@@ -14597,6 +14597,7 @@ var rpcContract = defineRpcContract2({
       usageStatus: external_exports.string(),
       total: external_exports.number(),
       observed: external_exports.number(),
+      requests: external_exports.number(),
       loads: external_exports.number(),
       applications: external_exports.number(),
       observations: external_exports.number(),
@@ -14605,6 +14606,7 @@ var rpcContract = defineRpcContract2({
         description: external_exports.string(),
         path: external_exports.string(),
         calls: external_exports.number(),
+        requests: external_exports.number(),
         loads: external_exports.number(),
         applications: external_exports.number(),
         lastUsed: external_exports.string().nullable(),
@@ -14624,6 +14626,7 @@ function usageReport(catalog, now = Date.now()) {
     usageStatus: catalog.usageStatus,
     total: rows.length,
     observed: rows.filter((row) => row.calls > 0).length,
+    requests: rows.reduce((n, row) => n + row.requests, 0),
     loads: rows.reduce((n, row) => n + row.loads, 0),
     applications: rows.reduce((n, row) => n + row.applications, 0),
     observations,
@@ -14647,9 +14650,9 @@ async function plugin(bb) {
     if (!s.registryHostId || !s.registryPath) throw new Error("Configure hsr registryHostId and registryPath with bb plugin config hsr set <key> <value>.");
     return s;
   }
-  async function snapshot(signal) {
+  async function snapshot(signal, collect = true) {
     const s = await config2();
-    const catalog = await host.call("catalog", { registryPath: s.registryPath, nodeBinary: s.nodeBinary }, { hostId: s.registryHostId, signal });
+    const catalog = await host.call("catalog", { registryPath: s.registryPath, nodeBinary: s.nodeBinary, collect }, { hostId: s.registryHostId, signal });
     return { s, catalog };
   }
   async function list(input, signal, json2 = false) {
@@ -14671,9 +14674,24 @@ async function plugin(bb) {
     await record2(skill, "applied", session, signal);
     return `Recorded HSR application: ${skill}.`;
   }
+  let collecting = null;
+  const collectionAbort = new AbortController();
+  bb.onDispose(async () => {
+    collectionAbort.abort();
+    await collecting;
+  });
+  function collectInBackground() {
+    if (collecting) return;
+    collecting = snapshot(collectionAbort.signal).catch((error51) => {
+      if (!collectionAbort.signal.aborted) bb.log.warn(`HSR collection: ${String(error51)}`);
+    }).finally(() => {
+      collecting = null;
+    });
+  }
   bb.rpc.register(rpcContract, {
     usage: async () => {
-      const { catalog } = await snapshot();
+      collectInBackground();
+      const { catalog } = await snapshot(void 0, false);
       if (catalog.usageStatus.startsWith("unavailable")) throw new Error(catalog.usageStatus);
       return usageReport(catalog);
     }

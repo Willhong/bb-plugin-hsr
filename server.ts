@@ -22,9 +22,9 @@ export default async function plugin(bb: BbPluginApi) {
     if (!s.registryHostId || !s.registryPath) throw new Error("Configure hsr registryHostId and registryPath with bb plugin config hsr set <key> <value>.");
     return s;
   }
-  async function snapshot(signal?: AbortSignal) {
+  async function snapshot(signal?: AbortSignal, collect = true) {
     const s = await config();
-    const catalog = await host.call("catalog", { registryPath: s.registryPath, nodeBinary: s.nodeBinary }, { hostId: s.registryHostId, signal });
+    const catalog = await host.call("catalog", { registryPath: s.registryPath, nodeBinary: s.nodeBinary, collect }, { hostId: s.registryHostId, signal });
     return { s, catalog };
   }
 
@@ -49,9 +49,17 @@ export default async function plugin(bb: BbPluginApi) {
     return `Recorded HSR application: ${skill}.`;
   }
 
+  let collecting: Promise<unknown> | null = null;
+  const collectionAbort = new AbortController();
+  bb.onDispose(async () => { collectionAbort.abort(); await collecting; });
+  function collectInBackground() {
+    if (collecting) return;
+    collecting = snapshot(collectionAbort.signal).catch(error => { if (!collectionAbort.signal.aborted) bb.log.warn(`HSR collection: ${String(error)}`); }).finally(() => { collecting = null; });
+  }
   bb.rpc.register(rpcContract, {
     usage: async () => {
-      const { catalog } = await snapshot();
+      collectInBackground();
+      const { catalog } = await snapshot(undefined, false);
       if (catalog.usageStatus.startsWith("unavailable")) throw new Error(catalog.usageStatus);
       return usageReport(catalog);
     },

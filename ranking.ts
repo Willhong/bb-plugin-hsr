@@ -10,7 +10,7 @@ export function rank(catalog: Catalog, query = "", now = Date.now()) {
   return catalog.skills.filter(s => !q || `${s.name} ${s.description}`.toLocaleLowerCase().includes(q)).map(s => {
     const h = catalog.history[s.name];
     const historicalScore = h ? decayedScore(h.calls, Date.parse(h.lastUsed ?? ""), now) : 0;
-    return { ...s, calls: h?.calls ?? 0, loads: h?.loads ?? 0, applications: h?.applications ?? 0, lastUsed: h?.lastUsed ?? null, score: historicalScore };
+    return { ...s, calls: h?.calls ?? 0, requests: h?.requests ?? 0, loads: h?.loads ?? 0, applications: h?.applications ?? 0, lastUsed: h?.lastUsed ?? null, score: historicalScore };
   }).sort((a, b) => Number(b.name.toLocaleLowerCase() === q) - Number(a.name.toLocaleLowerCase() === q) || b.score - a.score || a.name.localeCompare(b.name));
 }
 

@@ -26,7 +26,7 @@
 .hsr-usage__search { flex: 1 1 240px; }
 .hsr-usage__caption { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 6px 16px; margin: 20px 0 10px; }
 .hsr-usage__table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 13px; }
-.hsr-usage__name-col { width: 34%; }.hsr-usage__share-col { width: 19%; }.hsr-usage__date-col { width: 21%; }
+.hsr-usage__name-col { width: 30%; }.hsr-usage__share-col { width: 15%; }.hsr-usage__date-col { width: 19%; }
 .hsr-usage__table th, .hsr-usage__table td { border-bottom: 1px solid var(--border); padding: 12px 10px; text-align: right; vertical-align: top; font-variant-numeric: tabular-nums; }
 .hsr-usage__table thead th { color: var(--muted-foreground); font-weight: 500; font-size: 12px; background: var(--background); }
 .hsr-usage__table th:first-child { text-align: left; padding-left: 0; }
@@ -59,4 +59,8 @@
   .hsr-usage__table { font-size: 12px; }.hsr-usage__table thead th { font-size: 11px; }
   .hsr-usage__toolbar label:not(.hsr-usage__search) { flex: 1; }
   .hsr-usage__search { flex-basis: 100%; }
+}
+
+@container (max-width: 640px) {
+  .hsr-usage__share-col, .hsr-usage__share-cell { display: none; }
 }

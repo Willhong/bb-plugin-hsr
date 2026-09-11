@@ -132,3 +132,19 @@ test('host RPC, agent tools, CLI, persistence and concurrent usage work through 
   await assert.rejects(reloaded.harness.behavior.setSettings({budgetChars:-1}));
   assert.equal((await reloaded.harness.behavior.runCli(['list','--unknown'])).exitCode,1);
 });
+
+test('UI reads the saved ledger without waiting for background collection', async t => {
+  let release!: (value: unknown) => void;
+  const slow = new Promise(resolve => { release = resolve; });
+  const catalog = {registryPath:'/hsr',skills:[],history:{},usageStatus:'cached'};
+  const {bb,harness}=createFakePluginHost({pluginId:'hsr',experimental_hostEntry:true,
+    settings:{registryHostId:'registry-host',registryPath:'/hsr'},
+    experimental_callHostRpc: async ({input}) => (input as {collect:boolean}).collect ? slow : catalog,
+  });
+  await plugin(bb);
+  t.after(async()=>{release(catalog);await harness.lifecycle.dispose();});
+  const timeout = new Promise((_,reject)=>{const timer=setTimeout(()=>reject(new Error('UI waited for collection')),500);timer.unref();});
+  const result=rpcContract.usage.output.parse(await Promise.race([harness.behavior.callRpc('usage',{}),timeout]));
+  assert.equal(result.usageStatus,'cached');
+  assert.equal(result.total,0);
+});

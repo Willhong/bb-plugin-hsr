@@ -36272,7 +36272,7 @@ config2(en_default2());
 // ../bb-plugins/bb-plugin-hsr/contract.ts
 var skillName = external_exports2.string().regex(/^[a-z0-9][a-z0-9_-]{0,99}$/);
 var location = external_exports2.object({ registryPath: external_exports2.string().min(1), nodeBinary: external_exports2.string().min(1) });
-var historyEntry = external_exports2.object({ calls: external_exports2.number().nonnegative(), loads: external_exports2.number().nonnegative().default(0), applications: external_exports2.number().nonnegative().default(0), lastUsed: external_exports2.string().nullable() });
+var historyEntry = external_exports2.object({ calls: external_exports2.number().nonnegative(), requests: external_exports2.number().nonnegative().default(0), loads: external_exports2.number().nonnegative().default(0), applications: external_exports2.number().nonnegative().default(0), lastUsed: external_exports2.string().nullable() });
 var catalogSchema = external_exports2.object({
   registryPath: external_exports2.string(),
   skills: external_exports2.array(external_exports2.object({ name: skillName, description: external_exports2.string(), path: external_exports2.string() })).max(500),
@@ -36290,7 +36290,7 @@ var hostContract = defineRpcContract2({
     input: location.extend({ skill: skillName, kind: external_exports2.enum(["loaded", "applied"]), session: external_exports2.string().min(1).max(300), eventId: external_exports2.string().min(1).max(100) }),
     output: external_exports2.object({ recorded: external_exports2.boolean(), eventId: external_exports2.string(), skill: external_exports2.string(), kind: external_exports2.string() })
   },
-  catalog: { input: location, output: catalogSchema },
+  catalog: { input: location.extend({ collect: external_exports2.boolean().default(true) }), output: catalogSchema },
   read: {
     input: location.extend(readInput.shape),
     output: external_exports2.object({ path: external_exports2.string(), text: external_exports2.string(), totalChars: external_exports2.number(), nextOffset: external_exports2.number().nullable() })
@@ -36353,7 +36353,7 @@ async function loadCatalog(input, signal) {
   let usageStatus = "ok";
   const history = {};
   try {
-    const { stdout } = await run(input.nodeBinary, [path2.join(root, "bin/hong-skills.js"), "usage", "--json"], {
+    const { stdout } = await run(input.nodeBinary, [path2.join(root, "bin/hong-skills.js"), "usage", ...input.collect === false ? ["--cached"] : [], "--json"], {
       cwd: root,
       timeout: 2e4,
       maxBuffer: 4 * 1024 * 1024,
@@ -36365,13 +36365,13 @@ async function loadCatalog(input, signal) {
     } else if (result.collection?.engine !== "hsr-native") {
       usageStatus = "unavailable: HSR native tracking is required; upgrade the registry checkout";
     } else {
-      usageStatus = result.collection.status;
+      usageStatus = input.collect === false && result.collection.status === "ready" ? "cached" : result.collection.status;
       const names = new Set(skills.map((s) => s.name));
       for (const row of result.rows) {
         if (!names.has(row.name)) continue;
         const calls = Number(row.calls);
         if (!Number.isFinite(calls) || calls < 0) continue;
-        history[row.name] = { calls, loads: Number(row.loads) || 0, applications: Number(row.applications) || 0, lastUsed: typeof row.lastUsed === "string" && Number.isFinite(Date.parse(row.lastUsed)) ? row.lastUsed : null };
+        history[row.name] = { calls, requests: Number(row.requests) || 0, loads: Number(row.loads) || 0, applications: Number(row.applications) || 0, lastUsed: typeof row.lastUsed === "string" && Number.isFinite(Date.parse(row.lastUsed)) ? row.lastUsed : null };
       }
     }
   } catch (error98) {

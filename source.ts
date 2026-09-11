@@ -34,7 +34,7 @@ async function skillRoot(root: string, name: string) {
   return target;
 }
 
-export async function loadCatalog(input: { registryPath: string; nodeBinary: string }, signal?: AbortSignal): Promise<Catalog> {
+export async function loadCatalog(input: { registryPath: string; nodeBinary: string; collect?: boolean }, signal?: AbortSignal): Promise<Catalog> {
   const root = await registry(input.registryPath);
   const entries = await fs.readdir(path.join(root, "skills"), { withFileTypes: true });
   const skills: Catalog["skills"] = [];
@@ -57,7 +57,7 @@ export async function loadCatalog(input: { registryPath: string; nodeBinary: str
   let usageStatus = "ok";
   const history: Catalog["history"] = {};
   try {
-    const { stdout } = await run(input.nodeBinary, [path.join(root, "bin/hong-skills.js"), "usage", "--json"], {
+    const { stdout } = await run(input.nodeBinary, [path.join(root, "bin/hong-skills.js"), "usage", ...(input.collect === false ? ["--cached"] : []), "--json"], {
       cwd: root, timeout: 20000, maxBuffer: 4 * 1024 * 1024, signal,
     });
     const result = JSON.parse(stdout);
@@ -66,13 +66,13 @@ export async function loadCatalog(input: { registryPath: string; nodeBinary: str
     } else if (result.collection?.engine !== "hsr-native") {
       usageStatus = "unavailable: HSR native tracking is required; upgrade the registry checkout";
     } else {
-      usageStatus = result.collection.status;
+      usageStatus = input.collect === false && result.collection.status === "ready" ? "cached" : result.collection.status;
       const names = new Set(skills.map(s => s.name));
       for (const row of result.rows) {
         if (!names.has(row.name)) continue;
         const calls = Number(row.calls);
         if (!Number.isFinite(calls) || calls < 0) continue;
-        history[row.name] = { calls, loads: Number(row.loads) || 0, applications: Number(row.applications) || 0, lastUsed: typeof row.lastUsed === "string" && Number.isFinite(Date.parse(row.lastUsed)) ? row.lastUsed : null };
+        history[row.name] = { calls, requests: Number(row.requests) || 0, loads: Number(row.loads) || 0, applications: Number(row.applications) || 0, lastUsed: typeof row.lastUsed === "string" && Number.isFinite(Date.parse(row.lastUsed)) ? row.lastUsed : null };
       }
     }
   } catch (error) {

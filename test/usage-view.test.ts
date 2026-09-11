@@ -5,7 +5,7 @@ import type { Catalog } from '../contract.js';
 const catalog: Catalog = {
   registryPath:'/registry',usageStatus:'ready',
   skills:['alpha','beta','unused'].map(name=>({name,description:`${name} 설명`,path:`/registry/skills/${name}/SKILL.md`})),
-  history:{alpha:{calls:3,loads:2,applications:1,lastUsed:'2026-09-11T00:00:00Z'},beta:{calls:1,loads:1,applications:0,lastUsed:'2026-09-12T00:00:00Z'}},
+  history:{alpha:{calls:3,requests:0,loads:2,applications:1,lastUsed:'2026-09-11T00:00:00Z'},beta:{calls:1,requests:0,loads:1,applications:0,lastUsed:'2026-09-12T00:00:00Z'}},
 };
 test('usage shares retain the complete registry denominator when searched and filtered',()=>{
   const report=usageReport(catalog);

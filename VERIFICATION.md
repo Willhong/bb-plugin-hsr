@@ -1,3 +1,15 @@
+# Tracking semantics and loading — 0.6.0 (2026-09-12)
+
+- Confirmed original Claude slash-command records for evidence-based-resume that were omitted from the former application count.
+- Native parser version 3 backfilled 20 explicit requests, 18 body loads and 0 application reports for that skill in the observed local source records. Application reports remain distinct from requests and execution.
+- HSR tests cover explicit Claude/Codex requests, ignored skill edits/quotes/negation, idempotent backfill, and cached reads while a collector write transaction is held.
+- Plugin tests cover UI RPC returning saved data while background collection is stalled and a client deadline releasing a stalled request so a retry can succeed.
+- Registry suite: 31 tests passed. Plugin suite: 9 tests passed. Typecheck and both UI/BB builds passed.
+- BB sidebar uses cached reads and one coalesced background collection, with a 10-second UI response deadline.
+- Live browser after a full reload showed evidence-based-resume as 20 requests / 18 loads / 0 application reports. Measured HSR RPC durations were 5,043 ms on cold page load alongside other BB startup requests, then 96–97 ms for subsequent reads. This does not guarantee a sub-second cold load.
+
+---
+
 # Sidebar UI verification — 0.5.0 (2026-09-12)
 
 - Added native BB `navPanel` named 스킬 사용 현황 at `/plugins/hsr/usage` with a typed, read-only `usage` RPC. The current BB sidebar displayed the new entry directly.

@@ -27,3 +27,5 @@ This plugin provides an additional bounded index. It does not suppress or replac
 ## BB sidebar
 
 Users can open **스킬 사용 현황** in BB's left sidebar to view registered skills, loads, explicit applications, observation share, and last-record timestamps. Name/description search, record-type filters, sorting, and manual refresh are available. This read-only view does not record use. All figures cover the collected history; observation share keeps the entire registry denominator even when filtered.
+
+The sidebar distinguishes explicit user requests (명시적 요청), body loads (본문 로드), and agent application reports (적용 보고). Zero application reports does not mean zero actual uses. Saved counts render before background collection completes.

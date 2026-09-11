@@ -18,9 +18,9 @@ For development: `npm ci`, `npm run build`, `bb plugin install . --yes`. Build a
 
 ## Sidebar UI
 
-Open **스킬 사용 현황** in BB's left sidebar (`/plugins/hsr/usage`). The page shows every registered skill, including names with no observed records, with body loads, explicit applications, observation share, and the most recent record. Search names/descriptions, filter by record type, and sort by observations, applications, recency, or name. Expand a skill name to read its description without recording a load.
+Open **스킬 사용 현황** in BB's left sidebar (`/plugins/hsr/usage`). The page shows every registered skill, including names with no observed records, with explicit user requests, body loads, application reports, observation share, and the most recent record. Search names/descriptions, filter by record type, and sort by observations, applications, recency, or name. Expand a skill name to read its description without recording a load.
 
-Observation share is `(skill loads + application events) / all registered skill observations`; searching or filtering does not change the denominator. Figures cover the entire collected history and do not claim actual instruction compliance. Zero observations produces 0%, not an invalid percentage.
+Observation share is `(skill requests + loads + application reports) / all registered skill observations`; searching or filtering does not change the denominator. Figures cover the entire collected history and do not claim actual instruction compliance. Zero observations produces 0%, not an invalid percentage.
 
 The page refreshes every 30 seconds while visible, on window focus, or with 새로고침. In-progress/partial collection, loading, missing configuration, failed refresh, and empty results are shown explicitly. A refresh error keeps the last snapshot visibly marked as old. Viewing this UI never records a skill load or application. On narrow screens the latest timestamp moves under the skill name.
 
@@ -42,7 +42,7 @@ HSR reads Codex/Claude/Pi JSONL transcripts and Hermes state databases directly.
 
 This plugin sends initial body reads as `loaded` and actual applications as `applied` to `hong-skills usage-record` on the registry host. Each request has an event ID. HSR persists it before the tool reports success, and repeated event IDs do not duplicate records. HSR ignores transcript echoes of these native tools. The plugin's former KV usage counter is no longer read or written.
 
-The list exposes `loads`, `applications`, `calls`, and `lastUsed`. `calls` is the sum of observed loads and explicit application events, not an exact count of real-world instruction application. Rank uses `calls * exp(-days / 30)` from the single HSR ledger. Old and new databases are not summed or compared.
+The list exposes `requests`, `loads`, `applications`, `calls`, and `lastUsed`. `calls` is the sum of explicit requests, observed loads and application reports, not an exact count of real-world instruction application. Rank uses `calls * exp(-days / 30)` from the single HSR ledger. Old and new databases are not summed or compared.
 
 Tracking status is `ready`, `collecting`, or `partial`; unavailable or outdated collectors are reported rather than labeled healthy. Initial backfill can require several queries. HSR's own API includes per-provider freshness and source errors. The registry's `docs/NATIVE-USAGE-TRACKING.md` describes parser coverage and inference limits, including ambiguous shell execution and provider-vs-BB session identity.
 
@@ -75,3 +75,9 @@ SDK 0.4.55's ESM host test bundle needs a CommonJS require bridge (`test/registe
 ## Attribution
 
 Forked from upstream v0.2.1 / commit `e551a65`; retains the 30-day decay ranking concept. Upstream originally ported the Hermes progressive-skill decision core. The original [MIT license](LICENSE) and attribution are preserved.
+
+## 0.6: request counts and responsive loading
+
+`requests` counts explicit skill invocations from original user messages, including Claude slash-command records. `applications` is labeled 적용 보고 and counts only the agent's separate reports; zero reports is not proof of no use. Request parsing is conservative and excludes editing/creation requests, negation and quoted examples. The registry's parser version 3 rebuilds original records to backfill requests.
+
+The sidebar reads `usage --cached` first and starts one background collection shared across clients. It does not wait for backfill. A 10-second client deadline restores retry controls if the transport stalls. The registry must support the cached CLI flag and requests field. Its saved ledger is opened read-only, so an active collector write transaction does not block the page's read.
