@@ -36272,7 +36272,7 @@ config2(en_default2());
 // ../bb-plugins/bb-plugin-hsr/contract.ts
 var skillName = external_exports2.string().regex(/^[a-z0-9][a-z0-9_-]{0,99}$/);
 var location = external_exports2.object({ registryPath: external_exports2.string().min(1), nodeBinary: external_exports2.string().min(1) });
-var historyEntry = external_exports2.object({ calls: external_exports2.number().nonnegative(), lastUsed: external_exports2.string().nullable() });
+var historyEntry = external_exports2.object({ calls: external_exports2.number().nonnegative(), loads: external_exports2.number().nonnegative().default(0), applications: external_exports2.number().nonnegative().default(0), lastUsed: external_exports2.string().nullable() });
 var catalogSchema = external_exports2.object({
   registryPath: external_exports2.string(),
   skills: external_exports2.array(external_exports2.object({ name: skillName, description: external_exports2.string(), path: external_exports2.string() })).max(500),
@@ -36286,6 +36286,10 @@ var readInput = external_exports2.object({
   limit: external_exports2.number().int().min(1).max(12e3).default(12e3)
 });
 var hostContract = defineRpcContract2({
+  record: {
+    input: location.extend({ skill: skillName, kind: external_exports2.enum(["loaded", "applied"]), session: external_exports2.string().min(1).max(300), eventId: external_exports2.string().min(1).max(100) }),
+    output: external_exports2.object({ recorded: external_exports2.boolean(), eventId: external_exports2.string(), skill: external_exports2.string(), kind: external_exports2.string() })
+  },
   catalog: { input: location, output: catalogSchema },
   read: {
     input: location.extend(readInput.shape),
@@ -36358,18 +36362,21 @@ async function loadCatalog(input, signal) {
     const result = JSON.parse(stdout);
     if (result.usageOk !== true || !Array.isArray(result.rows)) {
       usageStatus = `unavailable: ${String(result.reason ?? "invalid HSR usage response").slice(0, 100)}`;
+    } else if (result.collection?.engine !== "hsr-native") {
+      usageStatus = "unavailable: HSR native tracking is required; upgrade the registry checkout";
     } else {
+      usageStatus = result.collection.status;
       const names = new Set(skills.map((s) => s.name));
       for (const row of result.rows) {
         if (!names.has(row.name)) continue;
         const calls = Number(row.calls);
         if (!Number.isFinite(calls) || calls < 0) continue;
-        history[row.name] = { calls, lastUsed: typeof row.lastUsed === "string" && Number.isFinite(Date.parse(row.lastUsed)) ? row.lastUsed : null };
+        history[row.name] = { calls, loads: Number(row.loads) || 0, applications: Number(row.applications) || 0, lastUsed: typeof row.lastUsed === "string" && Number.isFinite(Date.parse(row.lastUsed)) ? row.lastUsed : null };
       }
     }
   } catch (error98) {
     if (signal?.aborted) throw error98;
-    usageStatus = "unavailable: HSR usage command failed (check Node >= 22.5 and AgentsView DB)";
+    usageStatus = "unavailable: HSR usage command failed (check Node >= 22.5 and HSR native tracking)";
   }
   return catalogSchema.parse({ registryPath: root, skills, history, usageStatus });
 }
@@ -36383,11 +36390,21 @@ async function readSkill(input) {
   const end = Math.min(content.length, input.offset + input.limit);
   return { path: file3, text: content.slice(input.offset, end), totalChars: content.length, nextOffset: end < content.length ? end : null };
 }
+async function recordSkill(input, signal) {
+  const root = await registry3(input.registryPath);
+  const dir = await skillRoot(root, input.skill);
+  await containedFile(dir, "SKILL.md");
+  const { stdout } = await run(input.nodeBinary, [path2.join(root, "bin/hong-skills.js"), "usage-record", input.skill, "--kind", input.kind, "--session", input.session, "--event-id", input.eventId, "--provider", "bb", "--json"], { cwd: root, timeout: 2e4, maxBuffer: 1024 * 1024, signal });
+  const result = JSON.parse(stdout);
+  if (result.ok !== true || result.recorded !== true) throw new Error("HSR could not persist the tracking event.");
+  return { recorded: true, eventId: result.eventId, skill: result.skill, kind: result.kind };
+}
 
 // ../bb-plugins/bb-plugin-hsr/host.ts
 var host_default = experimental_defineHostEntry({
   contract: hostContract,
   handlers: {
+    record: (input, context) => recordSkill(input, context.signal),
     catalog: (input, context) => loadCatalog(input, context.signal),
     read: (input) => readSkill(input)
   }

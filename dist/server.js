@@ -14525,13 +14525,13 @@ function date4(params) {
 config(en_default());
 
 // server.ts
-import { createHash } from "node:crypto";
+import { randomUUID } from "node:crypto";
 
 // contract.ts
 import { defineRpcContract } from "@get-bb/plugin-sdk";
 var skillName = external_exports.string().regex(/^[a-z0-9][a-z0-9_-]{0,99}$/);
 var location = external_exports.object({ registryPath: external_exports.string().min(1), nodeBinary: external_exports.string().min(1) });
-var historyEntry = external_exports.object({ calls: external_exports.number().nonnegative(), lastUsed: external_exports.string().nullable() });
+var historyEntry = external_exports.object({ calls: external_exports.number().nonnegative(), loads: external_exports.number().nonnegative().default(0), applications: external_exports.number().nonnegative().default(0), lastUsed: external_exports.string().nullable() });
 var catalogSchema = external_exports.object({
   registryPath: external_exports.string(),
   skills: external_exports.array(external_exports.object({ name: skillName, description: external_exports.string(), path: external_exports.string() })).max(500),
@@ -14545,6 +14545,10 @@ var readInput = external_exports.object({
   limit: external_exports.number().int().min(1).max(12e3).default(12e3)
 });
 var hostContract = defineRpcContract({
+  record: {
+    input: location.extend({ skill: skillName, kind: external_exports.enum(["loaded", "applied"]), session: external_exports.string().min(1).max(300), eventId: external_exports.string().min(1).max(100) }),
+    output: external_exports.object({ recorded: external_exports.boolean(), eventId: external_exports.string(), skill: external_exports.string(), kind: external_exports.string() })
+  },
   catalog: { input: location, output: catalogSchema },
   read: {
     input: location.extend(readInput.shape),
@@ -14557,20 +14561,18 @@ function decayedScore(count, timestamp, now) {
   if (!Number.isFinite(count) || count < 0 || !Number.isFinite(timestamp) || timestamp <= 0) return 0;
   return count * Math.exp(-Math.max(0, now - timestamp) / (30 * 864e5));
 }
-function rank(catalog, usage, query = "", now = Date.now()) {
+function rank(catalog, query = "", now = Date.now()) {
   const q = query.trim().toLocaleLowerCase();
   return catalog.skills.filter((s) => !q || `${s.name} ${s.description}`.toLocaleLowerCase().includes(q)).map((s) => {
     const h = catalog.history[s.name];
-    const u = usage[s.name];
     const historicalScore = h ? decayedScore(h.calls, Date.parse(h.lastUsed ?? ""), now) : 0;
-    const recordedScore = u ? decayedScore(u.count, u.lastUsed, now) : 0;
-    return { ...s, score: Math.max(historicalScore, recordedScore), historicalScore, recordedScore };
+    return { ...s, calls: h?.calls ?? 0, loads: h?.loads ?? 0, applications: h?.applications ?? 0, lastUsed: h?.lastUsed ?? null, score: historicalScore };
   }).sort((a, b) => Number(b.name.toLocaleLowerCase() === q) - Number(a.name.toLocaleLowerCase() === q) || b.score - a.score || a.name.localeCompare(b.name));
 }
-function renderList(catalog, usage, options) {
-  const rows = rank(catalog, usage, options.query);
-  const header = `HSR: ${catalog.skills.length} curated skills; ${rows.length} matches. History: ${catalog.usageStatus}.
-Source host: ${options.hostId}. Use hsr_skill_read(skill) to load the authoritative text. \u2605 score >= ${options.promote}; score = max(history, recorded), 30-day decay.
+function renderList(catalog, options) {
+  const rows = rank(catalog, options.query);
+  const header = `HSR: ${catalog.skills.length} curated skills; ${rows.length} matches. Tracking: ${catalog.usageStatus}.
+Source host: ${options.hostId}. Use hsr_skill_read(skill) to load the authoritative text. \u2605 score >= ${options.promote}; HSR ledger, 30-day decay.
 `;
   const footer = "\nSearch with query for omitted skills. This list does not replace BB's default skill prompt.";
   const lines = [];
@@ -14591,7 +14593,7 @@ async function plugin(bb) {
   const settings = bb.settings.define({
     registryHostId: { type: "string", label: "HSR host ID", default: "", description: "Explicit BB host containing the authoritative HSR checkout." },
     registryPath: { type: "string", label: "HSR checkout path", default: "", description: "Absolute hong-skill-registry path on the configured host." },
-    nodeBinary: { type: "string", label: "Node executable on HSR host", default: "node", description: "Node >= 22.5 for the read-only HSR usage command." },
+    nodeBinary: { type: "string", label: "Node executable on HSR host", default: "node", description: "Node >= 22.5 for native HSR collection and event recording." },
     budgetChars: { type: "number", label: "List character budget", default: 6e3, experimental_schema: external_exports.number().int().min(1e3).max(2e4) },
     promoteScore: { type: "number", label: "Promote score", default: 2, experimental_schema: external_exports.number().min(0).max(1e6) }
   });
@@ -14604,57 +14606,45 @@ async function plugin(bb) {
   async function snapshot(signal) {
     const s = await config2();
     const catalog = await host.call("catalog", { registryPath: s.registryPath, nodeBinary: s.nodeBinary }, { hostId: s.registryHostId, signal });
-    const key = "usage:" + createHash("sha256").update(JSON.stringify([s.registryHostId, catalog.registryPath])).digest("hex");
-    const raw = await bb.storage.kv.get(key);
-    const parsed = external_exports.record(external_exports.string(), external_exports.object({ count: external_exports.number().nonnegative(), lastUsed: external_exports.number().nonnegative() })).safeParse(raw);
-    const usage = parsed.success ? parsed.data : {};
-    return { s, catalog, key, usage };
+    return { s, catalog };
   }
   async function list(input, signal, json2 = false) {
-    const { s, catalog, usage } = await snapshot(signal);
-    if (json2) return JSON.stringify({ registryPath: catalog.registryPath, hostId: s.registryHostId, usageStatus: catalog.usageStatus, total: catalog.skills.length, rows: rank(catalog, usage, input.query).slice(0, input.maxSkills) }, null, 2);
-    return renderList(catalog, usage, { ...input, budget: s.budgetChars, promote: s.promoteScore, hostId: s.registryHostId });
+    const { s, catalog } = await snapshot(signal);
+    if (json2) return JSON.stringify({ registryPath: catalog.registryPath, hostId: s.registryHostId, usageStatus: catalog.usageStatus, total: catalog.skills.length, rows: rank(catalog, input.query).slice(0, input.maxSkills) }, null, 2);
+    return renderList(catalog, { ...input, budget: s.budgetChars, promote: s.promoteScore, hostId: s.registryHostId });
   }
-  async function read(input, signal) {
+  async function record2(skill, kind, session, signal) {
     const s = await config2();
-    return host.call("read", { ...input, registryPath: s.registryPath, nodeBinary: s.nodeBinary }, { hostId: s.registryHostId, signal });
+    return host.call("record", { registryPath: s.registryPath, nodeBinary: s.nodeBinary, skill, kind, session, eventId: randomUUID() }, { hostId: s.registryHostId, signal });
   }
-  let recording = Promise.resolve();
-  function used(skill, signal) {
-    const next = recording.then(async () => {
-      const { catalog, key, usage } = await snapshot(signal);
-      if (!catalog.skills.some((s) => s.name === skill)) throw new Error(`Unknown HSR skill: ${skill}`);
-      const valid = new Set(catalog.skills.map((s) => s.name));
-      for (const name of Object.keys(usage)) if (!valid.has(name)) delete usage[name];
-      usage[skill] = { count: (usage[skill]?.count ?? 0) + 1, lastUsed: Date.now() };
-      await bb.storage.kv.set(key, usage);
-      return `Recorded HSR usage: ${skill}. Count ${usage[skill].count}.`;
-    });
-    recording = next.catch(() => {
-    });
-    return next;
+  async function read(input, session, signal) {
+    const s = await config2();
+    const result = await host.call("read", { ...input, registryPath: s.registryPath, nodeBinary: s.nodeBinary }, { hostId: s.registryHostId, signal });
+    if (input.file === "SKILL.md" && input.offset === 0) await record2(input.skill, "loaded", session, signal);
+    return result;
   }
-  bb.onDispose(async () => {
-    await recording;
-  });
+  async function used(skill, session, signal) {
+    await record2(skill, "applied", session, signal);
+    return `Recorded HSR application: ${skill}.`;
+  }
   bb.agents.registerTool({
     name: "hsr_skill_list",
-    description: "Search curated hong-skill-registry skills by name or description. One entry per source skill, ranked using HSR history and recorded usage, with a bounded description list. Use query to find omitted or rarely-used skills.",
+    description: "Search curated hong-skill-registry skills by name or description. One entry per source skill, ranked using HSR's own transcript and application ledger, with a bounded description list. Use query to find omitted or rarely-used skills.",
     instructions: "For hong-skill-registry skills, use hsr_skill_list to discover and hsr_skill_read to load the authoritative text. Record real application with hsr_skill_used. Explicit user requests for a skill take priority over usage rank.",
     parameters: listInput,
     execute: (input, ctx) => list(input, ctx.signal)
   });
   bb.agents.registerTool({
     name: "hsr_skill_read",
-    description: "Read a curated HSR skill or a relative supporting file from the configured registry host. Returns a bounded page and nextOffset; continue until all needed instructions are read. Does not record usage automatically.",
+    description: "Read a curated HSR skill or a relative supporting file from the configured registry host. Returns a bounded page and nextOffset; continue until all needed instructions are read. Records initial SKILL.md loads in the HSR ledger; application is recorded separately.",
     parameters: readInput,
-    execute: async (input, ctx) => JSON.stringify(await read(input, ctx.signal))
+    execute: async (input, ctx) => JSON.stringify(await read(input, ctx.threadId, ctx.signal))
   });
   bb.agents.registerTool({
     name: "hsr_skill_used",
     description: "Record an HSR skill after actually applying it. Do not record inspection, search, or editing as use. Accepts only a current curated skill name.",
     parameters: external_exports.object({ skill: skillName }),
-    execute: ({ skill }, ctx) => used(skill, ctx.signal)
+    execute: ({ skill }, ctx) => used(skill, ctx.threadId, ctx.signal)
   });
   bb.cli.register({
     name: "hsr",
@@ -14680,8 +14670,8 @@ async function plugin(bb) {
           } else positional.push(arg);
         }
         if (command === "list" && positional.length === 0) return { exitCode: 0, stdout: await list(listInput.parse({ query: flags.query, maxSkills: flags.limit === void 0 ? void 0 : Number(flags.limit) }), ctx.signal, flags.json === true) };
-        if (command === "read" && positional.length === 1) return { exitCode: 0, stdout: JSON.stringify(await read(readInput.parse({ skill: positional[0], file: flags.file, offset: flags.offset === void 0 ? void 0 : Number(flags.offset), limit: flags.limit === void 0 ? void 0 : Number(flags.limit) }), ctx.signal), null, 2) };
-        if (command === "used" && positional.length === 1) return { exitCode: 0, stdout: await used(skillName.parse(positional[0]), ctx.signal) };
+        if (command === "read" && positional.length === 1) return { exitCode: 0, stdout: JSON.stringify(await read(readInput.parse({ skill: positional[0], file: flags.file, offset: flags.offset === void 0 ? void 0 : Number(flags.offset), limit: flags.limit === void 0 ? void 0 : Number(flags.limit) }), ctx.threadId ?? "cli", ctx.signal), null, 2) };
+        if (command === "used" && positional.length === 1) return { exitCode: 0, stdout: await used(skillName.parse(positional[0]), ctx.threadId ?? "cli", ctx.signal) };
         throw new Error("Unknown command or arguments. Run bb hsr --help.");
       } catch (error51) {
         return { exitCode: 1, stderr: error51 instanceof Error ? error51.message : String(error51) };

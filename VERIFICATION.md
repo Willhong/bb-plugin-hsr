@@ -1,3 +1,19 @@
+# Verification — 0.4.0 (2026-09-11)
+
+This release replaces the v0.3 AgentsView integration with the native HSR tracking contract. The old v0.3 verification below is historical and does not describe the active storage path.
+
+- Typecheck, 5 plugin behavior tests, and server/host builds passed.
+- The SDK test verifies that an initial body read increases loads once, a continuation does not, and neither creates an application event.
+- Four concurrent application calls reach the HSR CLI boundary; the resulting count remains available after plugin reload.
+- HSR's separate test suite covers actual native SQLite collection, Codex/Claude/Pi/Hermes adapters, incomplete records, duplicate events/files, failed reads, reference exclusion, and direct application events.
+- Live plugin status: `hsr` version 0.4.0, running. Native list uses the current HSR ledger and exposes loads/applications separately.
+- During this task, a real application of diagnosing-bugs was recorded through `bb hsr used`. The HSR CLI, plugin list, and web UI showed applications increasing from 0 to 1.
+- Browser verification used the existing HSR UI at port 8470. The page showed HSR-native tracking status, name search, and separate load/application counts.
+
+The real host RPC route was exercised on one machine. A second physical machine was not tested. The runtime native tools were tested via the SDK harness and the live CLI uses the same handlers.
+
+---
+
 # Verification — 0.3.0 (2026-09-11)
 
 ## Automated

@@ -1,12 +1,10 @@
 # HSR Skills for BB
 
-A fork of [prismatic7/bb-plugin-progressive-skill](https://github.com/prismatic7/bb-plugin-progressive-skill), adapted for the local `hong-skill-registry` project. BB plugin ID: `hsr`.
-
-Search and read the skills deliberately kept in a configured `hong-skill-registry/skills/` checkout. Multiple `.agents`, `.claude`, and `.bb` installations do not create duplicate entries. The authoritative source is the registry, so a stale provider copy does not change what `hsr_skill_read` returns.
+A fork of [prismatic7/bb-plugin-progressive-skill](https://github.com/prismatic7/bb-plugin-progressive-skill) for a local `hong-skill-registry` checkout. Plugin ID: `hsr`. Version 0.4 uses **HSR's own tracking ledger**, not AgentsView's database or a separate plugin usage counter.
 
 ## Install
 
-Requires BB Plugin SDK >= 0.4.55 and a registry host with HSR's CLI and Node >= 22.5. This plugin uses BB's public host RPC API; the registry host can differ from the agent's host.
+Requires BB Plugin SDK >= 0.4.55 and an HSR checkout with native tracking (`src/tracking/`). Install HSR's dependencies with `npm install` in that checkout. The configured registry host needs Node >= 22.5.
 
 ```sh
 bb plugin install git:https://github.com/Willhong/bb-plugin-hsr.git --yes
@@ -16,62 +14,56 @@ bb plugin config hsr set registryPath /absolute/path/to/hong-skill-registry
 bb hsr list
 ```
 
-For local development, clone this fork, run `npm ci`, `npm run build`, and `bb plugin install . --yes`. Settings are read per request. For code changes, build and reload `hsr`. New native tools and the plugin skill appear when BB constructs the next provider session. The CLI is available immediately.
+For development: `npm ci`, `npm run build`, `bb plugin install . --yes`. Build and reload `hsr` after code changes. Settings are read per request. Updated native tool declarations appear when BB next constructs the provider session; CLI changes apply immediately.
 
-This fork has distinct tool names and can coexist with the original `progressive-skill` plugin. Installing it does not disable the original or change HSR's links. It does not publish a marketplace entry.
+## Tools
 
-## Agent tools and CLI
-
-| Tool | Behavior | CLI |
+| Tool | CLI | Behavior |
 | --- | --- | --- |
-| `hsr_skill_list` | Search names and descriptions, then rank a bounded list | `bb hsr list [--query text] [--limit 1-100] [--json]` |
-| `hsr_skill_read` | Read `SKILL.md` or a relative supporting file, with pagination | `bb hsr read <skill> [--file relative-path] [--offset N] [--limit 1-12000]` |
-| `hsr_skill_used` | Record actual application of a current HSR skill | `bb hsr used <skill>` |
+| `hsr_skill_list` | `bb hsr list [--query text] [--limit 1-100] [--json]` | Search curated names/descriptions, one entry per source skill |
+| `hsr_skill_read` | `bb hsr read <skill> [--file relative-path] [--offset N] [--limit 1-12000]` | Read authoritative source text; record initial SKILL.md load |
+| `hsr_skill_used` | `bb hsr used <skill>` | Record an explicit application after actually using the skill |
 
-An explicit skill request overrides rank. Use `query` to retrieve an omitted or rarely used skill. Search covers the source name and up to 2,000 normalized description characters; the text list displays up to 160 description characters. `list --json` returns paths, both score components, and source host information for at most 100 rows. Source paths belong to the configured host, not necessarily the invoking machine.
+`read` returns `path`, `text`, `totalChars`, and `nextOffset`. Read the remaining pages before applying instructions. Reference files and continuation pages do not create another load event. Reads do not imply that every instruction was applied; application is recorded separately. Search is not usage. Explicit user requests override rank.
 
-`read` returns `path`, `text`, `totalChars`, and `nextOffset`. Offsets and the character budget use JavaScript string length (UTF-16 code units), not a tokenizer. Follow `nextOffset` to read the rest before applying instructions. Relative references stay within the selected skill; traversal and escaping symlinks are rejected. Binary files and files over 1 MiB are refused.
+File operations execute on the configured registry host through public BB host RPC. Source paths belong to that host, not necessarily the caller. Traversal, escaping symlinks, binary files, and files over 1 MiB are refused.
 
-## Ranking and history
+## Native tracking
 
-- Read HSR's existing `node bin/hong-skills.js usage --json` command on the configured registry host. Its AgentsView database remains read-only. Only current curated names enter this plugin's history.
-- Keep actual `hsr_skill_used` calls separately in BB KV, isolated by registry host and canonical checkout path. Concurrent recordings are serialized and saved before reporting success.
-- Apply the upstream decay formula to both sources: `count * exp(-days / 30)`. Historical count is HSR's `calls`; recorded count is calls to `hsr_skill_used`.
-- Rank by **max(history score, recorded score)**, not their sum, because the sources can overlap. This is a conservative ranking heuristic, not an exact merged use count. HSR's inferred reads and name normalization remain HSR's responsibility.
-- Exact name matches precede score sorting for a search. Score ties sort by name. A score at or above `promoteScore` gets a star.
-- Missing, unavailable, or incompatible history is reported in the list. Catalog discovery and reading still work. A missing or invalid registry itself is an error.
+HSR reads Codex/Claude/Pi JSONL transcripts and Hermes state databases directly. It maintains its own SQLite ledger, source cursors, and tool-call/result matching. Source transcripts are read-only. HSR's `usage` query incrementally collects new records; its web UI refreshes every 30 seconds. No AgentsView process, schema, or database is needed for tracking.
 
-Listing, inspecting, or editing a skill does not automatically record use. Call `hsr_skill_used` only after application. Usage indicates frequency, not whether a skill fits the task.
+This plugin sends initial body reads as `loaded` and actual applications as `applied` to `hong-skills usage-record` on the registry host. Each request has an event ID. HSR persists it before the tool reports success, and repeated event IDs do not duplicate records. HSR ignores transcript echoes of these native tools. The plugin's former KV usage counter is no longer read or written.
 
-## Settings
+The list exposes `loads`, `applications`, `calls`, and `lastUsed`. `calls` is the sum of observed loads and explicit application events, not an exact count of real-world instruction application. Rank uses `calls * exp(-days / 30)` from the single HSR ledger. Old and new databases are not summed or compared.
+
+Tracking status is `ready`, `collecting`, or `partial`; unavailable or outdated collectors are reported rather than labeled healthy. Initial backfill can require several queries. HSR's own API includes per-provider freshness and source errors. The registry's `docs/NATIVE-USAGE-TRACKING.md` describes parser coverage and inference limits, including ambiguous shell execution and provider-vs-BB session identity.
+
+## Settings and limits
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `registryHostId` | empty | Explicit BB machine ID containing HSR; required |
-| `registryPath` | empty | Absolute HSR checkout path on that host; required |
-| `nodeBinary` | `node` | Host's Node executable for HSR history |
-| `budgetChars` | `6000` | Complete native/text list budget, including metadata (1,000–20,000) |
-| `promoteScore` | `2` | Star threshold (0–1,000,000) |
+| `registryHostId` | empty | Explicit BB host containing HSR |
+| `registryPath` | empty | Absolute HSR checkout path on that host |
+| `nodeBinary` | `node` | Host Node executable for collection and recording |
+| `budgetChars` | `6000` | Entire text-list budget, 1,000–20,000 UTF-16 code units |
+| `promoteScore` | `2` | Star threshold |
 
-The curated catalog supports up to 500 source skill directories. Each source must have matching folder/frontmatter names and a string description. Invalid metadata is reported instead of silently losing a skill. The host executes only the configured HSR usage command, with argument arrays, a 20-second timeout, and bounded output.
+Catalog: at most 500 source skill directories with matching frontmatter/folder names. Search covers up to 2,000 normalized description characters per skill; text rows display up to 160. Query an omitted skill by name. JSON lists return up to 100 rows. The registry command has a 20-second timeout and bounded output.
 
-## Limits
+This plugin does not suppress BB/provider system-prompt skill catalogs, install HSR provider links, or modify source skills. It has no dedicated UI; HSR's existing web UI reads the same native ledger. The original Progressive Skill can coexist under separate tool names.
 
-This plugin adds a bounded discovery tool. It **does not replace or compact BB/provider system-prompt skill catalogs**. No claim of automatic prompt-token savings is made. It also does not import skills, install provider links, repair drift, or modify HSR.
-
-The explicit central registry host is used for all sessions. If it is offline, requests fail rather than reading a different machine. Remote transport uses the SDK host route, but live verification for this release was performed on one machine, not a two-machine deployment.
-
-## Development and verification
+## Verification
 
 ```sh
-npm ci
 npm run typecheck
 npm test
 npm run build
 ```
 
-Behavior tests cover curated scope, HSR history, conservative scoring, bounded lists and omitted-skill search, unavailable history, paginated reference reads, path escape rejection, native tools/CLI through the SDK harness, persistence over reload, and concurrent usage. The test bootstrap supplies a CommonJS require bridge for SDK 0.4.55's ESM host bundle; production host helpers are bundled by BB's host builder.
+Tests exercise the source CLI boundary, bounded search, pagination, missing history, filesystem containment, public SDK imports, initial-load-only recording, explicit application persistence, concurrency, and SDK host routing. The HSR repository separately tests actual SQLite storage and provider adapters. See [VERIFICATION.md](VERIFICATION.md) for live checks and limits.
+
+SDK 0.4.55's ESM host test bundle needs a CommonJS require bridge (`test/register.mjs`). Production host helpers are bundled by BB.
 
 ## Attribution
 
-Forked from upstream v0.2.1 / commit `e551a65` (the installed version originally inspected was `3a867de`). The decay-based ranking idea is retained. Upstream originally ported the Hermes progressive-skill decision core. The original MIT license and attribution are preserved in [LICENSE](LICENSE).
+Forked from upstream v0.2.1 / commit `e551a65`; retains the 30-day decay ranking concept. Upstream originally ported the Hermes progressive-skill decision core. The original [MIT license](LICENSE) and attribution are preserved.

@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-hsr",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "license": "MIT",
   "repository": "github:Willhong/bb-plugin-hsr",
   "scripts": {
@@ -15,7 +15,7 @@
   },
   "bb": {
     "name": "HSR Skills",
-    "description": "Search and read curated HSR skills, ranked by HSR history and recorded usage.",
+    "description": "Search curated HSR skills and track loads and applications in the native HSR ledger.",
     "branding": {
       "icon": "Layers"
     },

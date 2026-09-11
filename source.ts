@@ -63,18 +63,21 @@ export async function loadCatalog(input: { registryPath: string; nodeBinary: str
     const result = JSON.parse(stdout);
     if (result.usageOk !== true || !Array.isArray(result.rows)) {
       usageStatus = `unavailable: ${String(result.reason ?? "invalid HSR usage response").slice(0, 100)}`;
+    } else if (result.collection?.engine !== "hsr-native") {
+      usageStatus = "unavailable: HSR native tracking is required; upgrade the registry checkout";
     } else {
+      usageStatus = result.collection.status;
       const names = new Set(skills.map(s => s.name));
       for (const row of result.rows) {
         if (!names.has(row.name)) continue;
         const calls = Number(row.calls);
         if (!Number.isFinite(calls) || calls < 0) continue;
-        history[row.name] = { calls, lastUsed: typeof row.lastUsed === "string" && Number.isFinite(Date.parse(row.lastUsed)) ? row.lastUsed : null };
+        history[row.name] = { calls, loads: Number(row.loads) || 0, applications: Number(row.applications) || 0, lastUsed: typeof row.lastUsed === "string" && Number.isFinite(Date.parse(row.lastUsed)) ? row.lastUsed : null };
       }
     }
   } catch (error) {
     if (signal?.aborted) throw error;
-    usageStatus = "unavailable: HSR usage command failed (check Node >= 22.5 and AgentsView DB)";
+    usageStatus = "unavailable: HSR usage command failed (check Node >= 22.5 and HSR native tracking)";
   }
   return catalogSchema.parse({ registryPath: root, skills, history, usageStatus });
 }
@@ -88,4 +91,14 @@ export async function readSkill(input: { registryPath: string; skill: string; fi
   if (content.includes("\0")) throw new Error("Binary files cannot be read as skill instructions.");
   const end = Math.min(content.length, input.offset + input.limit);
   return { path: file, text: content.slice(input.offset, end), totalChars: content.length, nextOffset: end < content.length ? end : null };
+}
+
+export async function recordSkill(input: { registryPath: string; nodeBinary: string; skill: string; kind: string; session: string; eventId: string }, signal?: AbortSignal) {
+  const root = await registry(input.registryPath);
+  const dir = await skillRoot(root, input.skill);
+  await containedFile(dir, "SKILL.md");
+  const { stdout } = await run(input.nodeBinary, [path.join(root, "bin/hong-skills.js"), "usage-record", input.skill, "--kind", input.kind, "--session", input.session, "--event-id", input.eventId, "--provider", "bb", "--json"], { cwd: root, timeout: 20000, maxBuffer: 1024 * 1024, signal });
+  const result = JSON.parse(stdout);
+  if (result.ok !== true || result.recorded !== true) throw new Error("HSR could not persist the tracking event.");
+  return { recorded: true, eventId: result.eventId, skill: result.skill, kind: result.kind };
 }

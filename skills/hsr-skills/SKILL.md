@@ -18,6 +18,8 @@ CLI equivalents:
 
 Configure `registryHostId`, absolute `registryPath`, and optionally `nodeBinary` through `bb plugin config hsr set <key> <value>`. The Node executable runs on the configured registry host and must support the HSR CLI (Node >= 22.5). No invocation uses the caller's cwd as the registry.
 
-The plugin reads HSR's `usage --json` history without writing its database. Ranking uses the larger of the history call score and the separately recorded use score, with 30-day decay. These sources may overlap, so they are not summed. Missing history is reported; discovery and reading still work. Rank reflects usage, not task relevance or adoption quality.
+The plugin uses HSR's own usage ledger. HSR incrementally reads Codex, Claude, Pi and Hermes source records directly; AgentsView is not a tracking dependency. Initial SKILL.md reads create `loaded` events, and `hsr_skill_used` creates `applied` events in the same ledger. Reference reads and continuation pages do not increase the load count. Source transcripts are read-only; HSR writes only its own SQLite database. Search is not counted as use.
+
+Collection state (`ready`, `collecting`, `partial`) is shown in the list. Calls represent observed loads plus explicit applications, not proof that every loaded instruction affected the result. Rank reflects this observation count with 30-day decay.
 
 This plugin provides an additional bounded index. It does not suppress or replace BB/provider skill prompts and does not manage HSR's provider links.
