@@ -3,6 +3,8 @@ import { z } from "zod";
 import { randomUUID } from "node:crypto";
 import { hostContract, readInput, skillName } from "./contract.js";
 import { renderList, rank } from "./ranking.js";
+import { rpcContract } from "./ui-contract.js";
+import { usageReport } from "./usage-view.js";
 
 const listInput = z.object({ query: z.string().max(200).optional(), maxSkills: z.number().int().min(1).max(100).default(30) });
 
@@ -46,6 +48,14 @@ export default async function plugin(bb: BbPluginApi) {
     await record(skill, "applied", session, signal);
     return `Recorded HSR application: ${skill}.`;
   }
+
+  bb.rpc.register(rpcContract, {
+    usage: async () => {
+      const { catalog } = await snapshot();
+      if (catalog.usageStatus.startsWith("unavailable")) throw new Error(catalog.usageStatus);
+      return usageReport(catalog);
+    },
+  });
 
   bb.agents.registerTool({
     name: "hsr_skill_list",

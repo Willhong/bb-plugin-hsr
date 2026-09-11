@@ -14587,6 +14587,50 @@ Source host: ${options.hostId}. Use hsr_skill_read(skill) to load the authoritat
   return text;
 }
 
+// ui-contract.ts
+import { defineRpcContract as defineRpcContract2 } from "@get-bb/plugin-sdk";
+var rpcContract = defineRpcContract2({
+  usage: {
+    input: external_exports.object({}).strict(),
+    output: external_exports.object({
+      fetchedAt: external_exports.string(),
+      usageStatus: external_exports.string(),
+      total: external_exports.number(),
+      observed: external_exports.number(),
+      loads: external_exports.number(),
+      applications: external_exports.number(),
+      observations: external_exports.number(),
+      rows: external_exports.array(external_exports.object({
+        name: external_exports.string(),
+        description: external_exports.string(),
+        path: external_exports.string(),
+        calls: external_exports.number(),
+        loads: external_exports.number(),
+        applications: external_exports.number(),
+        lastUsed: external_exports.string().nullable(),
+        score: external_exports.number(),
+        share: external_exports.number()
+      })).max(500)
+    })
+  }
+});
+
+// usage-view.ts
+function usageReport(catalog, now = Date.now()) {
+  const rows = rank(catalog, "", now);
+  const observations = rows.reduce((n, row) => n + row.calls, 0);
+  return {
+    fetchedAt: new Date(now).toISOString(),
+    usageStatus: catalog.usageStatus,
+    total: rows.length,
+    observed: rows.filter((row) => row.calls > 0).length,
+    loads: rows.reduce((n, row) => n + row.loads, 0),
+    applications: rows.reduce((n, row) => n + row.applications, 0),
+    observations,
+    rows: rows.map((row) => ({ ...row, share: observations ? row.calls / observations * 100 : 0 }))
+  };
+}
+
 // server.ts
 var listInput = external_exports.object({ query: external_exports.string().max(200).optional(), maxSkills: external_exports.number().int().min(1).max(100).default(30) });
 async function plugin(bb) {
@@ -14627,6 +14671,13 @@ async function plugin(bb) {
     await record2(skill, "applied", session, signal);
     return `Recorded HSR application: ${skill}.`;
   }
+  bb.rpc.register(rpcContract, {
+    usage: async () => {
+      const { catalog } = await snapshot();
+      if (catalog.usageStatus.startsWith("unavailable")) throw new Error(catalog.usageStatus);
+      return usageReport(catalog);
+    }
+  });
   bb.agents.registerTool({
     name: "hsr_skill_list",
     description: "Search curated hong-skill-registry skills by name or description. One entry per source skill, ranked using HSR's own transcript and application ledger, with a bounded description list. Use query to find omitted or rarely-used skills.",

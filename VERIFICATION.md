@@ -1,3 +1,17 @@
+# Sidebar UI verification — 0.5.0 (2026-09-12)
+
+- Added native BB `navPanel` named 스킬 사용 현황 at `/plugins/hsr/usage` with a typed, read-only `usage` RPC. The current BB sidebar displayed the new entry directly.
+- 7 plugin tests cover RPC output/no usage side effects, registry-wide percentage denominator under search/filter, zero totals, filters, and sorts, in addition to existing host/CLI behavior.
+- Typecheck and BB server/host/app builds passed. The app bundle is approximately 11 KB and uses the host React runtime and theme tokens.
+- Live BB verification: sidebar click opened the page; 31 registered skills rendered; search preserved diagnosing-bugs at the same 3.9% share; unknown search showed the empty state and reset restored the list.
+- Captured the loaded desktop (1728×869) and mobile (390×844) views. At 390px, panel scrollWidth equaled clientWidth (390), with all 31 rows available. Screenshots remain local under .impeccable/review and are not published.
+- Mechanical design detector on app.tsx/app.css returned no findings.
+- Live record-type filter showed diagnosing-bugs as the one explicitly applied skill; alphabetical sorting began with architecture-review; description expansion and manual refresh worked.
+- Independent read-only finish review of source and desktop/mobile screenshots returned ship with no material findings in the requested UI scope. It did not run a screen reader or computed-contrast measurements.
+- Full collected history only; no period filter or adherence-rate claim. Existing plugin tools and HSR source files are not changed by viewing the UI.
+
+---
+
 # Verification — 0.4.0 (2026-09-11)
 
 This release replaces the v0.3 AgentsView integration with the native HSR tracking contract. The old v0.3 verification below is historical and does not describe the active storage path.

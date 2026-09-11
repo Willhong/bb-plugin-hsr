@@ -16,6 +16,14 @@ bb hsr list
 
 For development: `npm ci`, `npm run build`, `bb plugin install . --yes`. Build and reload `hsr` after code changes. Settings are read per request. Updated native tool declarations appear when BB next constructs the provider session; CLI changes apply immediately.
 
+## Sidebar UI
+
+Open **스킬 사용 현황** in BB's left sidebar (`/plugins/hsr/usage`). The page shows every registered skill, including names with no observed records, with body loads, explicit applications, observation share, and the most recent record. Search names/descriptions, filter by record type, and sort by observations, applications, recency, or name. Expand a skill name to read its description without recording a load.
+
+Observation share is `(skill loads + application events) / all registered skill observations`; searching or filtering does not change the denominator. Figures cover the entire collected history and do not claim actual instruction compliance. Zero observations produces 0%, not an invalid percentage.
+
+The page refreshes every 30 seconds while visible, on window focus, or with 새로고침. In-progress/partial collection, loading, missing configuration, failed refresh, and empty results are shown explicitly. A refresh error keeps the last snapshot visibly marked as old. Viewing this UI never records a skill load or application. On narrow screens the latest timestamp moves under the skill name.
+
 ## Tools
 
 | Tool | CLI | Behavior |
@@ -50,7 +58,7 @@ Tracking status is `ready`, `collecting`, or `partial`; unavailable or outdated 
 
 Catalog: at most 500 source skill directories with matching frontmatter/folder names. Search covers up to 2,000 normalized description characters per skill; text rows display up to 160. Query an omitted skill by name. JSON lists return up to 100 rows. The registry command has a 20-second timeout and bounded output.
 
-This plugin does not suppress BB/provider system-prompt skill catalogs, install HSR provider links, or modify source skills. It has no dedicated UI; HSR's existing web UI reads the same native ledger. The original Progressive Skill can coexist under separate tool names.
+This plugin does not suppress BB/provider system-prompt skill catalogs, install HSR provider links, or modify source skills. The BB sidebar now includes 스킬 사용 현황, backed by the same native ledger as HSR's web UI. The original Progressive Skill can coexist under separate tool names.
 
 ## Verification
 

@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-hsr",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "license": "MIT",
   "repository": "github:Willhong/bb-plugin-hsr",
   "scripts": {
@@ -15,12 +15,13 @@
   },
   "bb": {
     "name": "HSR Skills",
-    "description": "Search curated HSR skills and track loads and applications in the native HSR ledger.",
+    "description": "View curated skill usage in the BB sidebar and track loads and applications in the native HSR ledger.",
     "branding": {
       "icon": "Layers"
     },
     "server": "./server.ts",
-    "host": "./host.ts"
+    "host": "./host.ts",
+    "app": "./app.tsx"
   },
   "dependencies": {
     "yaml": "^2.8.1",
@@ -31,9 +32,12 @@
     "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.3.0",
     "better-sqlite3": "^12.0.0",
     "cron-parser": "^5.10.0",
     "hono": "^4.13.7",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
     "tsx": "^4.20.0",
     "typescript": "^5.7.0"
   }

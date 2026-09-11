@@ -23,3 +23,7 @@ The plugin uses HSR's own usage ledger. HSR incrementally reads Codex, Claude, P
 Collection state (`ready`, `collecting`, `partial`) is shown in the list. Calls represent observed loads plus explicit applications, not proof that every loaded instruction affected the result. Rank reflects this observation count with 30-day decay.
 
 This plugin provides an additional bounded index. It does not suppress or replace BB/provider skill prompts and does not manage HSR's provider links.
+
+## BB sidebar
+
+Users can open **스킬 사용 현황** in BB's left sidebar to view registered skills, loads, explicit applications, observation share, and last-record timestamps. Name/description search, record-type filters, sorting, and manual refresh are available. This read-only view does not record use. All figures cover the collected history; observation share keeps the entire registry denominator even when filtered.

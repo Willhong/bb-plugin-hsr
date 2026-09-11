@@ -10,9 +10,10 @@ import { experimental_createHostEntryHarness } from '@get-bb/plugin-sdk/testing/
 import plugin from '../server.js';
 import hostEntry from '../host.js';
 import { fileURLToPath } from 'node:url';
+import { rpcContract } from '../ui-contract.js';
 
 test('plugin imports only public SDK and declared packages', () => {
-  const scan = experimental_scanPublicSdkOnly(fileURLToPath(new URL('..', import.meta.url)), { allow: [/^yaml$/] });
+  const scan = experimental_scanPublicSdkOnly(fileURLToPath(new URL('..', import.meta.url)), { allow: [/^yaml$/, /^react$/] });
   assert.deepEqual(scan.violations, []);
   assert.deepEqual(scan.privateDependencies, []);
 });
@@ -98,6 +99,13 @@ test('host RPC, agent tools, CLI, persistence and concurrent usage work through 
   });
   t.after(async()=> {await harness.lifecycle.dispose(); await worker.experimental_dispose();});
   await plugin(bb);
+  const initialReport = rpcContract.usage.output.parse(await harness.behavior.callRpc('usage', {}));
+  assert.equal(initialReport.total,2);
+  assert.equal(initialReport.loads,20);
+  assert.equal(initialReport.applications,0);
+  assert.equal(initialReport.rows.find((r: {name:string})=>r.name==='alpha')?.share,100);
+  const repeatedReport = rpcContract.usage.output.parse(await harness.behavior.callRpc('usage', {}));
+  assert.equal(repeatedReport.loads,initialReport.loads,'viewing usage must not record a skill load');
   const list = await harness.behavior.callAgentTool('hsr_skill_list',{});
   assert.match(String(list), /alpha/);
   const page = JSON.parse(String(await harness.behavior.callAgentTool('hsr_skill_read', {skill:'alpha', limit:10})));
